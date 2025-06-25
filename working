@@ -1,0 +1,104 @@
+msg_str = to_string(.message) ?? ""
+
+# Parse common timestamp, PID, user, db, and log level
+parsed = parse_regex!(
+  msg_str,
+  r'^(?P<log_timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) UTC \[(?P<pid>\d+)\] (?P<user_db>\S+@\S+) (?P<level>[A-Z]+): (?P<details>.+)'
+)
+
+if parsed != null {
+  .pg_log_timestamp = parsed.log_timestamp
+  .pg_pid = parsed.pid
+  .pg_level = parsed.level
+  .pg_raw_user_db = parsed.user_db
+  .pg_log_message = parsed.details
+
+  # Split user@db
+  userdb = split(parsed.user_db, "@")
+  if length(userdb) == 2 {
+    .pg_user = userdb[0]
+    .pg_database = userdb[1]
+  }
+
+  # Parse additional fields from 'details' (depending on log level)
+  if contains(parsed.details, "connection received") {
+    parsed_conn = parse_regex!(parsed.details, r'connection received: host=(?P<host>[\d\.]+) port=(?P<port>\d+)')
+    if parsed_conn != null {
+        .src_ip = parsed_conn.host
+        .pg_conn_port = parsed_conn.port
+        del(.pg_conn_host)  
+    }
+  } else if contains(parsed.details, "no pg_hba.conf entry") {
+    parsed_auth = parse_regex!(
+      parsed.details,
+      r'no pg_hba\.conf entry for host "(?P<host>[\d\.]+)", user "(?P<user>[^"]+)", database "(?P<database>[^"]+)", (?P<auth_msg>.+)'
+    )
+    if parsed_auth != null {
+      .pg_auth_host = parsed_auth.host
+      .pg_auth_user = parsed_auth.user
+      .pg_auth_database = parsed_auth.database
+      .pg_auth_msg = parsed_auth.auth_msg
+      .src_ip = parsed_auth.host
+    }
+  }
+}
+
+.vendor = "PostgreSQL"
+.vendor_product = "PostgreSQL"
+.data_type = "postgres_log"
+.ingestion_time = now()
+.raw_event = encode_json(.)
+
+{"data_type":"postgres_log","file":"/var/lib/postgresql/16/main/log/postgresql-2025-06-25_081500.log","host":"postgressdbpoc","ingestion_time":"2025-06-25T08:17:50.758489865Z","message":"2025-06-25 08:17:48.244 UTC [2854518] [unknown]@[unknown] LOG: connection received: host=167.86.73.11 port=34710","path":"/","pg_conn_host":"167.86.73.11","pg_conn_port":"34710","pg_database":"[unknown]","pg_level":"LOG","pg_log_message":" connection received: host=167.86.73.11 port=34710","pg_log_timestamp":"2025-06-25 08:17:48.244","pg_pid":"2854518","pg_raw_user_db":"[unknown]@[unknown]","pg_user":"[unknown]","raw_event":"{\"data_type\":\"postgres_log\",\"file\":\"/var/lib/postgresql/16/main/log/postgresql-2025-06-25_081500.log\",\"host\":\"postgressdbpoc\",\"ingestion_time\":\"2025-06-25T08:17:50.758489865Z\",\"message\":\"2025-06-25 08:17:48.244 UTC [2854518] [unknown]@[unknown] LOG: connection received: host=167.86.73.11 port=34710\",\"path\":\"/\",\"pg_conn_host\":\"167.86.73.11\",\"pg_conn_port\":\"34710\",\"pg_d...
+{"data_type":"postgres_log","file":"/var/lib/postgresql/16/main/log/postgresql-2025-06-25_081500.log","host":"postgressdbpoc","ingestion_time":"2025-06-25T08:17:50.758729668Z","message":"2025-06-25 08:17:48.326 UTC [2854518] admin@postgres FATAL: no pg_hba.conf entry for host \"167.86.73.11\", user \"admin\", database \"postgres\", no encryption","path":"/","pg_auth_database":"postgres","pg_auth_host":"167.86.73.11","pg_auth_msg":"no encryption","pg_auth_user":"admin","pg_database":"postgres","pg_level":"FATAL","pg_log_message":" no pg_hba.conf entry for host \"167.86.73.11\", user \"admin\", database \"postgres\", no encryption","pg_log_timestamp":"2025-06-25 08:17:48.326","pg_pid":"2854518","pg_raw_user_db":"admin@postgres","pg_user":"admin","raw_event":"{\"data_type\":\"postgres_log\",\"file\":\"/var/lib/postgresql/16/main/log/postgresql-2025-06-25_081500.log\",\"host\":\"postgressdbpoc\",\"ingestion_time\":\"2025-06-25T08:17:50.758729668Z\",\"message\":\"2025-06-25 08:17:48.326 UTC [2854518] admin@pos...
+
+TenantId
+33a1e5cf-a12d-4b46-ab7e-6497a746d5cf
+SourceSystem
+RestAPI
+TimeGenerated [UTC]
+2025-06-25T08:17:51.759Z
+src_ip_s
+167.86.73.11
+ingestion_time_s
+2025-06-25T08:17:50.758489865Z
+pg_conn_host_s
+167.86.73.11
+pg_conn_port_s
+34710
+pg_database_s
+[unknown]
+pg_level_s
+LOG
+pg_log_message_s
+connection received: host=167.86.73.11 port=34710
+pg_log_timestamp_s
+2025-06-25 08:17:48.244
+pg_pid_s
+2854518
+pg_raw_user_db_s
+[unknown]@[unknown]
+pg_user_s
+[unknown]
+raw_event_s
+{"data_type":"postgres_log","file":"/var/lib/postgresql/16/main/log/postgresql-2025-06-25_081500.log","host":"postgressdbpoc","ingestion_time":"2025-06-25T08:17:50.758489865Z","message":"2025-06-25 08:17:48.244 UTC [2854518] [unknown]@[unknown] LOG: connection received: host=167.86.73.11 port=34710","path":"/","pg_conn_host":"167.86.73.11","pg_conn_port":"34710","pg_database":"[unknown]","pg_level":"LOG","pg_log_message":" connection received: host=167.86.73.11 port=34710","pg_log_timestamp":"2025-06-25 08:17:48.244","pg_pid":"2854518","pg_raw_user_db":"[unknown]@[unknown]","pg_user":"[unknown]","source_type":"file","src_ip":"167.86.73.11","timestamp":"2025-06-25T08:17:49.722256321Z","vendor":"PostgreSQL","vendor_product":"PostgreSQL"}
+vendor_s
+PostgreSQL
+vendor_product_s
+PostgreSQL
+data_type_s
+postgres_log
+file_s
+/var/lib/postgresql/16/main/log/postgresql-2025-06-25_081500.log
+host_s
+postgressdbpoc
+Message
+2025-06-25 08:17:48.244 UTC [2854518] [unknown]@[unknown] LOG: connection received: host=167.86.73.11 port=34710
+path_s
+/
+source_type_s
+file
+Type
+mcp_postgres_db_tst_CL
+_ResourceId
+/subscriptions/94c8616e-9a3e-480d-b7d1-3222a1669ccf/resourcegroups/pocastwu2rgacs/providers/microsoft.operationalinsights/workspaces/siempocmcp
