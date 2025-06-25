@@ -1,0 +1,39 @@
+parsed = parse_regex!(
+  .message,
+  r'^(?P<timestamp>[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}:\d{2}) (?P<hostname>\S+) (?P<process>\S+)\[(?P<pid>\d+)\]: (?P<service>\S+)\((?P<auth_module>[^)]+)\): (?P<status>[^;]+); (?P<kvpairs>.+)'
+)
+
+if parsed != null {
+  .timestamp_parsed = parsed.timestamp
+  .hostname_parsed = parsed.hostname
+  .process = parsed.process
+  .pid = parsed.pid
+  .service = parsed.service
+  .auth_module = parsed.auth_module
+  .status = parsed.status
+
+  kv_map = {}
+  kv_items = split(parsed.kvpairs, " ")
+
+  for_each(kv_items) -> |index, pair| {
+    if contains(pair, "=") {
+      parts = split(pair, "=")
+      if length(parts) == 2 {
+        kv_map, err = set(kv_map, array!(parts[0]), parts[1])
+      }
+    }
+  }
+
+  .logname, err = get(kv_map, array!("logname"))
+  .uid, err = get(kv_map, array!("uid"))
+  .euid, err = get(kv_map, array!("euid"))
+  .tty, err = get(kv_map, array!("tty"))
+  .ruser, err = get(kv_map, array!("ruser"))
+  .rhost, err = get(kv_map, array!("rhost"))
+  .user, err = get(kv_map, array!("user"))
+}
+.vendor = "RedHat"
+.vendor_product = "RedHat Enterprise Linux"
+.data_type = .vendor_product + " test"
+.ingestion_time = now()
+.raw_event = encode_json(.)
