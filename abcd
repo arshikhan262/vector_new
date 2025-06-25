@@ -1,0 +1,104 @@
+msg_str = to_string(.message) ?? ""
+
+parsed = parse_regex!(
+  msg_str,
+  r'type=(?P<type>\S+) msg=audit\((?P<epoch>\d+\.\d+):(?P<event_id>\d+)\): pid=(?P<pid>\d+) uid=(?P<uid>\d+) auid=(?P<auid>\d+) ses=(?P<ses>\d+) subj=(?P<subj>\S+) msg=\'(?P<msg>.*?)\'\x1dUID="(?P<UID>[^"]+)" AUID="(?P<AUID>[^"]+)"'
+)
+
+if parsed != null {
+  .audit_type = parsed.type
+  .audit_epoch = parsed.epoch
+  .audit_event_id = parsed.event_id
+  .pid = parsed.pid
+  .uid = parsed.uid
+  .auid = parsed.auid
+  .session = parsed.ses
+  .selinux_subj = parsed.subj
+  .UID = parsed.UID
+  .AUID = parsed.AUID
+  .audit_msg_raw = parsed.msg
+
+  kv_map = {}
+  kv_items = split(parsed.msg, " ")
+
+  for_each(kv_items) -> |_, pair| {
+    if contains(pair, "=") {
+      parts = split(pair, "=")
+      if length(parts) == 2 {
+        key = replace!(parts[0], "\"", "")
+        value = replace!(parts[1], "\"", "")
+        kv_map, _ = set(kv_map, array!(key), value)
+      }
+    }
+  }
+
+  .unit, _ = get(kv_map, array!("unit"))
+  .comm, _ = get(kv_map, array!("comm"))
+  .exe, _ = get(kv_map, array!("exe"))
+  .hostname_nested, _ = get(kv_map, array!("hostname"))
+  .addr, _ = get(kv_map, array!("addr"))
+  .terminal, _ = get(kv_map, array!("terminal"))
+  .res, _ = get(kv_map, array!("res"))
+}
+
+.vendor = "RedHat"
+.vendor_product = "RedHat Enterprise Linux"
+.data_type = .vendor_product + " audit"
+.ingestion_time = now()
+.raw_event = encode_json(.)
+*******************************************************
+{"file":"/var/log/audit/audit.log","host":"rhel1-vm","message":"type=SERVICE_START msg=audit(1750840988.411:2394557): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:init_t:s0 msg='unit=copy-audit-log comm=\"systemd\" exe=\"/usr/lib/systemd/systemd\" hostname=? addr=? terminal=? res=success'\u001dUID=\"root\" AUID=\"unset\"","path":"/","source_type":"file","timestamp":"2025-06-25T08:43:11.333811520Z"}
+{"file":"/var/log/audit/audit.log","host":"rhel1-vm","message":"type=SERVICE_STOP msg=audit(1750840988.411:2394558): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:init_t:s0 msg='unit=copy-audit-log comm=\"systemd\" exe=\"/usr/lib/systemd/systemd\" hostname=? addr=? terminal=? res=success'\u001dUID=\"root\" AUID=\"unset\"","path":"/","source_type":"file","timestamp":"2025-06-25T08:43:11.333832720Z"}
+
+TenantId
+33a1e5cf-a12d-4b46-ab7e-6497a746d5cf
+SourceSystem
+RestAPI
+TimeGenerated [UTC]
+2025-06-25T08:46:13.703Z
+AUID_s
+unset
+UID_s
+root
+audit_epoch_s
+1750841168.410
+audit_event_id_s
+2394561
+audit_msg_raw_s
+unit=copy-audit-log comm="systemd" exe="/usr/lib/systemd/systemd" hostname=? addr=? terminal=? res=success
+audit_type_s
+SERVICE_START
+auid_s
+4294967295
+selinux_subj_s
+system_u:system_r:init_t:s0
+session_s
+4294967295
+uid_s
+0
+file_s
+/var/log/audit/audit.log
+path_s
+/
+pid_s
+1
+ingestion_time_t [UTC]
+2025-06-25T08:46:12.7021566Z
+raw_event_s
+{"AUID":"unset","UID":"root","addr":null,"audit_epoch":"1750841168.410","audit_event_id":"2394561","audit_msg_raw":"unit=copy-audit-log comm=\"systemd\" exe=\"/usr/lib/systemd/systemd\" hostname=? addr=? terminal=? res=success","audit_type":"SERVICE_START","auid":"4294967295","comm":null,"data_type":"RedHat Enterprise Linux audit","exe":null,"file":"/var/log/audit/audit.log","host":"rhel1-vm","hostname_nested":null,"ingestion_time":"2025-06-25T08:46:12.702156603Z","message":"type=SERVICE_START msg=audit(1750841168.410:2394561): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:init_t:s0 msg='unit=copy-audit-log comm=\"systemd\" exe=\"/usr/lib/systemd/systemd\" hostname=? addr=? terminal=? res=success'\u001dUID=\"root\" AUID=\"unset\"","path":"/","pid":"1","res":null,"selinux_subj":"system_u:system_r:init_t:s0","session":"4294967295","source_type":"file","terminal":null,"timestamp":"2025-06-25T08:46:11.737724007Z","uid":"0","unit":null,"vendor":"RedHat","vendor_product":"RedHat Enterprise Linux"}
+vendor_s
+RedHat
+vendor_product_s
+RedHat Enterprise Linux
+data_type_s
+RedHat Enterprise Linux audit
+host_s
+rhel1-vm
+Message
+type=SERVICE_START msg=audit(1750841168.410:2394561): pid=1 uid=0 auid=4294967295 ses=4294967295 subj=system_u:system_r:init_t:s0 msg='unit=copy-audit-log comm="systemd" exe="/usr/lib/systemd/systemd" hostname=? addr=? terminal=? res=success'UID="root" AUID="unset"
+source_type_s
+file
+Type
+mcp_redhat_rhel_tst_CL
+_ResourceId
+/subscriptions/94c8616e-9a3e-480d-b7d1-3222a1669ccf/resourcegroups/pocastwu2rgacs/providers/microsoft.operationalinsights/workspaces/siempocm
