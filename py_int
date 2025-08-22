@@ -1,0 +1,244 @@
+import json
+import logging
+import os
+import requests
+import json
+from datetime import datetime, timedelta, timezone
+from azure.eventhub import EventHubProducerClient, EventData
+import azure.functions as func
+
+# Environment variable keys
+WIZ_CLIENT_ID_KEY = "wiz_client_id"
+WIZ_CLIENT_SECRET_KEY = "wiz_secret_key"
+WIZ_AUTH_URL_KEY = "wiz_auth_url"
+WIZ_API_ENDPOINT_KEY = "wiz_api_endpoint"
+EVENTHUB_CONNECTION_STRING_KEY = "eventhub_connection_string"
+EVENTHUB_NAME_KEY = "eventhub_name"
+AUDIT_LOGS_QUERY_FILTER_KEY = "audit_logs_query_filter"
+DEBUG_LEVEL_KEY = "debug_level" 
+FREQUENCY_MINUTES = 5 
+
+## Globals parameters init
+logger = logging.getLogger()
+WIZ_CLIENT_ID = ""
+WIZ_CLIENT_SECRET = ""
+WIZ_AUTH_URL = ""
+WIZ_API_ENDPOINT = ""
+AUDIT_LOGS_QUERY_FILTER = {}
+EVENTHUB_CONNECTION_STRING = ""
+EVENTHUB_NAME = ""
+
+VERSION = "1.0.0"
+INTEGRATION_GUID = "84729e85-48fa-c8fe-3caa-a3f1ac23b200"
+INTEGRATION_NAME = "wiz-audit-to-eventhub"
+
+# Wiz GraphQL query for audit logs
+AUDIT_LOGS_QUERY = """
+query AuditLogTable($first: Int $after: String $filterBy: AuditLogEntryFilters){
+    auditLogEntries(first: $first after: $after filterBy: $filterBy) {
+      nodes {
+        id
+        action
+        requestId
+        status
+        timestamp
+        userAgent
+        sourceIP
+        serviceAccount {
+          id
+          name
+        }
+        user {
+          id
+          name
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+"""
+
+class WizApi:
+    AUTH0_URLS = ['https://auth.wiz.io/oauth/token', 'https://auth0.gov.wiz.io/oauth/token']
+    COGNITO_URLS = [
+        'https://auth.app.wiz.io/oauth/token',
+        'https://auth.gov.wiz.io/oauth/token',
+        'https://auth.test.wiz.io/oauth/token',
+        'https://auth.demo.wiz.io/oauth/token'
+    ]
+    MAX_RETRIES = 3
+    RETRY_TIME = 30
+
+    @staticmethod
+    def user_agent():
+        return f"{INTEGRATION_GUID}/{INTEGRATION_NAME}/{VERSION}"
+
+    def _auth_payload(self):
+        # Pick correct audience based on URL family
+        if WIZ_AUTH_URL in self.AUTH0_URLS:
+            return {
+                "grant_type": "client_credentials",
+                "audience": "beyond-api",
+                "client_id": WIZ_CLIENT_ID,
+                "client_secret": WIZ_CLIENT_SECRET
+            }
+        if WIZ_AUTH_URL in self.COGNITO_URLS:
+            return {
+                "grant_type": "client_credentials",
+                "audience": "wiz-api",
+                "client_id": WIZ_CLIENT_ID,
+                "client_secret": WIZ_CLIENT_SECRET
+            }
+        raise Exception("Invalid Wiz auth URL")
+
+    def get_token(self):
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": self.user_agent()
+        }
+        resp = requests.post(WIZ_AUTH_URL, data=self._auth_payload(), headers=headers)
+        if resp.status_code != requests.codes.ok:
+            raise Exception(f"Wiz auth failed [{resp.status_code}] - {resp.text}")
+        tok = resp.json().get("access_token")
+        if not tok:
+            raise Exception(f"Wiz auth did not return access_token: {resp.text}")
+        logger.info("Authenticated to Wiz")
+        return tok
+
+    def _post_graphql(self, session, query, variables):
+        resp = session.post(WIZ_API_ENDPOINT, json={"query": query, "variables": variables})
+        retries = 0
+        while resp.status_code == requests.codes.too_many_requests and retries < self.MAX_RETRIES:
+            logger.warning(f"Wiz throttled; retry {retries+1}/{self.MAX_RETRIES} after {self.RETRY_TIME}s")
+            time.sleep(self.RETRY_TIME)
+            resp = session.post(WIZ_API_ENDPOINT, json={"query": query, "variables": variables})
+            retries += 1
+
+        if resp.status_code != requests.codes.ok:
+            raise Exception(f"Wiz GQL error [{resp.status_code}] - {resp.text}")
+        data = resp.json().get("data")
+        if not data:
+            raise Exception(f"Wiz GQL no data: {resp.text}")
+        return data
+
+    def get_audit_logs_since(self, session, since_iso):
+        variables = {
+            "first": 500,
+            "filterBy": {"timestamp": {"after": since_iso}},
+            "after": None
+        }
+        # merge optional additional filters from env
+        if AUDIT_LOGS_QUERY_FILTER:
+            variables["filterBy"].update(AUDIT_LOGS_QUERY_FILTER)
+
+        all_nodes = []
+        while True:
+            data = self._post_graphql(session, AUDIT_LOGS_QUERY, variables)
+            entries = data["auditLogEntries"]
+            nodes = entries["nodes"] or []
+            all_nodes.extend(nodes)
+            if entries["pageInfo"]["hasNextPage"]:
+                variables["after"] = entries["pageInfo"]["endCursor"]
+            else:
+                break
+        return all_nodes
+
+WIZ = WizApi()
+
+def _init_from_env():
+    global WIZ_CLIENT_ID, WIZ_CLIENT_SECRET, WIZ_AUTH_URL, WIZ_API_ENDPOINT
+    global EVENTHUB_CONNECTION_STRING, EVENTHUB_NAME, AUDIT_LOGS_QUERY_FILTER
+
+    WIZ_CLIENT_ID = os.environ[WIZ_CLIENT_ID_KEY]
+    WIZ_CLIENT_SECRET = os.environ[WIZ_CLIENT_SECRET_KEY]
+    WIZ_AUTH_URL = os.environ[WIZ_AUTH_URL_KEY]
+    WIZ_API_ENDPOINT = os.environ[WIZ_API_ENDPOINT_KEY]
+
+    EVENTHUB_CONNECTION_STRING = os.environ[EVENTHUB_CONNECTION_STRING_KEY]
+    EVENTHUB_NAME = os.environ[EVENTHUB_NAME_KEY]
+
+    # optional JSON filter
+    tmp = os.getenv(AUDIT_LOGS_QUERY_FILTER_KEY)
+    if tmp:
+        AUDIT_LOGS_QUERY_FILTER = json.loads(tmp)
+
+    lvl = int(os.getenv(DEBUG_LEVEL_KEY, "20"))
+    logger.setLevel(lvl)
+    logger.info("Loaded environment configuration")
+
+def _utc_now_iso():
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def _since_iso(minutes):
+    d = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+    return d.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+def _send_to_eventhub(findings):
+    if not findings:
+        logger.info("No audit logs to send")
+        return True
+
+    producer = EventHubProducerClient.from_connection_string(
+        conn_str=EVENTHUB_CONNECTION_STRING,
+    )
+    sent = 0
+    try:
+        idx = 0
+        while idx < len(findings):
+            batch = producer.create_batch()
+            while idx < len(findings):
+                envelope = {
+                    "type": "WizAuditLogs",
+                    "ingestedAt": _utc_now_iso(),
+                    "data": findings[idx]
+                }
+                body = json.dumps(envelope, separators=(",", ":"))
+                try:
+                    batch.add(EventData(body))
+                    idx += 1
+                except ValueError:
+                    break  # batch full
+            producer.send_batch(batch)
+            sent += len(batch)
+        logger.info(f"Sent {sent} Wiz audit events to Event Hub '{EVENTHUB_NAME}'")
+        return True
+    except Exception as e:
+        logger.error(f"Event Hub send error: {e}")
+        return False
+    finally:
+        producer.close()
+
+def main(mytimer: func.TimerRequest, context: func.Context) -> None:
+    logger.info(f"Start Wiz Audit → Event Hub. Func={context.function_name} v{VERSION}")
+    _init_from_env()
+
+    # Auth to Wiz
+    try:
+        token = WIZ.get_token()
+    except Exception as ex:
+        logger.error(f"Wiz auth error: {ex}")
+        return
+
+    # Session for Wiz GraphQL
+    with requests.Session() as s:
+        s.headers.update({
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": WizApi.user_agent()
+        })
+
+        try:
+            since = _since_iso(FREQUENCY_MINUTES)
+            logger.info(f"Fetching audit logs since {since}")
+            findings = WIZ.get_audit_logs_since(s, since)
+            logger.info(f"Fetched {len(findings)} audit log entries")
+            ok = _send_to_eventhub(findings)
+            if not ok:
+                raise Exception("Failed sending to Event Hub")
+            logger.info("Wiz Audit → Event Hub run completed")
+        except Exception as ex:
+            logger.error(f"Fetch/Send error: {ex}")
+            raise
